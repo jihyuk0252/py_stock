@@ -6,7 +6,6 @@ from config.errorCode import *
 from PyQt5.QtTest import *
 from config.kiwoomType import *
 from config.log_class import *
-#from config.slack import *
 
 class Kiwoom(QAxWidget):
     def __init__(self):
@@ -14,6 +13,7 @@ class Kiwoom(QAxWidget):
         print("Kiwoom() class start.")
         self.realType = RealType()
         self.logging = Logging()
+
         ####### 계좌 관련된 변수 모음
         self.account_stock_dict = {}
         self.not_account_stock_dict = {}
@@ -35,9 +35,10 @@ class Kiwoom(QAxWidget):
         ##########################################
 
         ####### event loop를 실행하기 위한 변수모음
-        self.login_event_loop = QEventLoop()  # 로그인 요청용 이벤트루프
+        self.loginEventLoop = QEventLoop()
         self.detail_account_info_event_loop = QEventLoop()  # 예수금 요청용 이벤트루프
         self.calculator_event_loop = QEventLoop()
+        self.condition_event_loop = QEventLoop()
         #######################################
 
         ####### 요청 스크린 번호
@@ -46,14 +47,16 @@ class Kiwoom(QAxWidget):
         self.screen_real_stock = "5000"  # 종목별 할당할 스크린 번호
         self.screen_meme_stock = "6000"  # 종목별 할당할 주문용스크린 번호
         self.screen_start_stop_real = "1000"  # 장 시작/종료 실시간 스크린번호
-
+        self.screen_condition = "3000"  # 조건 검색
 
 
         ####### 초기 셋팅 함수들 바로 실행
-        self.get_ocx_instance()  # OCX 방식을 파이썬에 사용할 수 있게 변환해 주는 함수
+        self.initOcxInstance()  # OCX 방식을 파이썬에 사용할 수 있게 변환해 주는 함수
         self.event_slots()  # 키움과 연결하기 위한 시그널 / 슬롯 모음
         self.real_event_slot()  # 실시간 이벤트 시그널 / 슬롯 연결
-        self.signal_login_commConnect() #로그인 요청 시그널 포함
+
+        self.connect()
+        self.get_condition_load() #조건 검색
         self.get_account_info() #계좌 정보를 조회
         self.detail_account_info() #예수금 정보 조회
         self.detail_account_mystock() #계좌평가잔고내역 요청 시그널 포함
@@ -82,26 +85,68 @@ class Kiwoom(QAxWidget):
         #     text="주식 자동화 프로그램이 동작 되었습니다."
         # )
 
-    def get_ocx_instance(self):
+
+    def initOcxInstance(self):
         self.setControl("KHOPENAPI.KHOpenAPICtrl.1") #OCX 방식을 파이썬에 사용할 수 있게 반환해 주는 함수 실행
 
-    def signal_login_commConnect(self):
+    def connect(self):
         self.dynamicCall("CommConnect()")
-        self.login_event_loop.exec_()  # 이벤트루프 실행
+        self.loginEventLoop.exec_()  # 이벤트루프 실행
 
-    def login_slot(self, err_code):
+    def loginSlot(self, err_code):
         self.logging.logger.debug(errors(err_code)[1])
-        # 로그인 처리가 완료됐으면 이벤트 루프를 종료한다.
-        self.login_event_loop.exit()
+        self.loginEventLoop.exit() #이벤트루프 종료
 
     def event_slots(self):
-        self.OnEventConnect.connect(self.login_slot) # 로그인 관련 이벤트
+        self.OnEventConnect.connect(self.loginSlot)  # 로그인 관련 이벤트
         self.OnReceiveTrData.connect(self.trdata_slot) # 트랜젝션 요청  관련 이벤트
         self.OnReceiveMsg.connect(self.msg_slot)
 
     def real_event_slot(self):
         self.OnReceiveRealData.connect(self.realdata_slot)  # 실시간 이벤트 연결
         self.OnReceiveChejanData.connect(self.chejan_slot)  # 종목 주문체결 관련한 이벤트
+        self.OnReceiveConditionVer.connect(self.slot_condition_load)  # 조건 검색 목록
+        self.OnReceiveTrCondition.connect(self.tr_condition_slot)  # TR데이터 슬록 연결)
+
+
+    def get_condition_load(self):
+        self.dynamicCall("GetConditionLoad()")
+
+
+    def slot_condition_load(self, result):
+        print("검색조건 결과식 : ", result)
+
+        condition_list = self.dynamicCall("GetConditionNameList()")[:-1].split(";")
+
+        for i in condition_list:
+            i_list = i.split("^")
+            i_index = int(i_list[0])
+            i_name = i_list[1]
+
+            if i_name == "엘리엇검색식":  # 기준선 최고일 때 컨디션 네임을 붙임
+                std_name = i_name
+                std_index = i_index
+                ret = self.dynamicCall("SendCondition(QString, QString, int, int)", self.screen_condition, std_name,
+                                       std_index, 0)
+                print("조건검색성공여부 : %s" % ret)  # 0 : 실패 , 1 : 성공
+
+    def tr_condition_slot(self, sCrNo, strCodeList, strConditionName, nIndex, nNext):
+
+        self.condition_jongmok_list = strCodeList[:-1].split(';')
+        print("조건식종목들 : ")
+        print(self.condition_jongmok_list)
+        for code_condition in self.condition_jongmok_list:
+            self.daily_data_chart(code=code_condition)  # 기준선 매매에 맞는 종목들 일봉 차트 가져오기
+
+        self.condition_event_loop.exit()
+
+
+
+    def getConditionListSlot(self, conditionNameList):
+        print(conditionNameList)
+        self.detail_account_info_event_loop.exit()
+
+
 
     def get_account_info(self):
         account_list = self.dynamicCall("GetLoginInfo(QString)", "ACCNO") #계좌 번호 반환
